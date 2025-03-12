@@ -1,120 +1,65 @@
+#include "editor.h"
 #include <ncurses.h>
-#include <stdlib.h>
-#include <string.h>
 #include <math.h>
 
-#define INITIAL_BUFFER_SIZE 1000
+static int scroll_y = 0;
 
-typedef struct
+void initEditor(void)
 {
-    char *content;
-    int size;
-    int capacity;
-} Buffer;
-
-void initBuffer(Buffer *buffer)
-{
-    buffer->content = malloc(INITIAL_BUFFER_SIZE);
-    if (buffer->content == NULL)
-    {
-        endwin();
-        fprintf(stderr, "Memory allocation failed\n");
-        exit(1);
-    }
-    buffer->content[0] = '\0';
-    buffer->size = 0;
-    buffer->capacity = INITIAL_BUFFER_SIZE;
+    initscr();
+    raw();
+    keypad(stdscr, TRUE);
+    noecho();
+    mousemask(BUTTON1_PRESSED, NULL);
+    mouseinterval(0);
 }
 
-void loadFile(Buffer *buffer, const char *filename)
+void cleanupEditor(void)
 {
-    FILE *file = fopen(filename, "r");
-    if (file == NULL)
-    {
-        endwin();
-        fprintf(stderr, "Error: Could not open file '%s'\n", filename);
-        exit(1);
-    }
-
-    // Read file content into buffer
-    int ch;
-    while ((ch = fgetc(file)) != EOF)
-    {
-        if (buffer->size + 1 >= buffer->capacity)
-        {
-            buffer->capacity *= 2;
-            char *new_content = realloc(buffer->content, buffer->capacity);
-            if (new_content == NULL)
-            {
-                endwin();
-                fprintf(stderr, "Memory reallocation failed\n");
-                fclose(file);
-                exit(1);
-            }
-            buffer->content = new_content;
-        }
-        buffer->content[buffer->size++] = ch;
-    }
-
-    fclose(file);
-}
-
-void insertChar(Buffer *buffer, int pos, char ch)
-{
-    if (buffer->size + 1 >= buffer->capacity)
-    {
-        buffer->capacity *= 2;
-        buffer->content = realloc(buffer->content, buffer->capacity);
-        if (buffer->content == NULL)
-        {
-            endwin();
-            fprintf(stderr, "Memory reallocation failed\n");
-            exit(1);
-        }
-    }
-
-    memmove(&buffer->content[pos + 1], &buffer->content[pos], buffer->size - pos + 1);
-    buffer->content[pos] = ch;
-    buffer->size++;
-}
-
-void deleteChar(Buffer *buffer, int pos)
-{
-    if (pos < buffer->size)
-    {
-        memmove(&buffer->content[pos], &buffer->content[pos + 1], buffer->size - pos);
-        buffer->size--;
-    }
+    endwin();
 }
 
 void displayBuffer(Buffer *buffer, int cursor_x, int cursor_y)
 {
     clear();
 
-    // Display buffer content with line numbers
-    int y = 0, x = 0;
-    int line_number = 1;
-    int line_number_width = 4; // Width for line numbers (e.g., "1  ", "12 ", etc.)
-
-    // Print first line number
-    mvprintw(y, 0, "%*d ", line_number_width - 1, line_number);
-    x = line_number_width + 2; // Account for line number and separator
-
-    for (int i = 0; i < buffer->size; i++)
+    // Adjust scroll position to keep cursor in view
+    if (cursor_y < scroll_y + SCROLL_MARGIN)
     {
+        scroll_y = MAX(0, cursor_y - SCROLL_MARGIN);
+    }
+    if (cursor_y >= scroll_y + LINES - SCROLL_MARGIN - 1)
+    {
+        scroll_y = cursor_y - LINES + SCROLL_MARGIN + 2;
+    }
+
+    // Display buffer content
+    int screen_y = 0;
+    int file_y = 0;
+    int x = 0;
+
+    for (int i = 0; i < buffer->size && screen_y < LINES - 1; i++)
+    {
+        if (file_y >= scroll_y)
+        {
+            if (buffer->content[i] == '\n')
+            {
+                screen_y++;
+                x = 0;
+            }
+            else
+            {
+                mvaddch(screen_y, x, buffer->content[i]);
+                x++;
+            }
+        }
         if (buffer->content[i] == '\n')
         {
-            y++;
-            line_number++;
-            x = 0;
-            // Print line number at the start of each line
-            mvprintw(y, 0, "%*d ", line_number_width - 1, line_number);
-            x = line_number_width + 2;
-        }
-        else
-        {
-            mvaddch(y, x, buffer->content[i]);
-            x++;
+            file_y++;
+            if (file_y < scroll_y)
+            {
+                x = 0;
+            }
         }
     }
 
@@ -122,13 +67,61 @@ void displayBuffer(Buffer *buffer, int cursor_x, int cursor_y)
     int pos_str_length = 11 + (int)log10(cursor_y + 1) + (int)log10(cursor_x + 1);
     mvprintw(LINES - 1, COLS - pos_str_length, "Ln %d, Col %d", cursor_y + 1, cursor_x + 1);
 
-    // Move cursor to current position (accounting for line number width)
-    move(cursor_y, cursor_x + line_number_width + 2);
+    // Move cursor to correct screen position
+    move(cursor_y - scroll_y, cursor_x);
     refresh();
 }
 
 void handleInput(Buffer *buffer, int ch, int *cursor_x, int *cursor_y)
 {
+    MEVENT event;
+
+    if (ch == KEY_MOUSE)
+    {
+        if (getmouse(&event) == OK)
+        {
+            if (event.bstate & BUTTON1_PRESSED)
+            {
+                // First check if the clicked line exists
+                int clicked_y = event.y;
+                int clicked_x = event.x;
+
+                // Count lines and find line length
+                int current_y = 0;
+                int line_start = 0;
+                int line_length = 0;
+
+                // Find the clicked line
+                for (int i = 0; i < buffer->size && current_y <= clicked_y; i++)
+                {
+                    if (current_y == clicked_y)
+                    {
+                        if (buffer->content[i] == '\n')
+                        {
+                            break;
+                        }
+                        line_length++;
+                    }
+                    else if (buffer->content[i] == '\n')
+                    {
+                        current_y++;
+                        line_start = i + 1;
+                        line_length = 0;
+                    }
+                }
+
+                // Only update position if line exists
+                if (current_y == clicked_y)
+                {
+                    *cursor_y = clicked_y;
+                    // Limit x position to end of line
+                    *cursor_x = (clicked_x < line_length) ? clicked_x : line_length;
+                }
+                return;
+            }
+        }
+    }
+
     int current_pos = 0;
     for (int i = 0; i < *cursor_y; i++)
     {
@@ -330,43 +323,64 @@ void handleInput(Buffer *buffer, int ch, int *cursor_x, int *cursor_y)
         insertChar(buffer, current_pos, ch);
         (*cursor_x)++;
     }
-}
-
-int main(int argc, char *argv[])
-{
-    if (argc != 2)
-    {
-        fprintf(stderr, "Usage: %s <filename>\n", argv[0]);
-        return 1;
-    }
-
-    Buffer buffer;
-    initBuffer(&buffer);
-    loadFile(&buffer, argv[1]);
-
-    int ch;
-    int cursor_x = 0, cursor_y = 0;
-
-    initscr();
-    raw();
-    keypad(stdscr, TRUE);
-    noecho();
-
-    while (1)
-    {
-        displayBuffer(&buffer, cursor_x, cursor_y);
-
-        ch = getch();
-
-        if (ch == 17)
-        { // Ctrl+Q
-            break;
+    else if (ch == KEY_PPAGE)
+    { // Page Up
+        int page_size = LINES - 2;
+        for (int i = 0; i < page_size && *cursor_y > 0; i++)
+        {
+            (*cursor_y)--;
+            // Adjust cursor_x similar to UP key
+            int line_length = 0;
+            int line_start = current_pos;
+            while (line_start > 0 && buffer->content[line_start - 1] != '\n')
+            {
+                line_start--;
+            }
+            while (line_start + line_length < buffer->size &&
+                   buffer->content[line_start + line_length] != '\n')
+            {
+                line_length++;
+            }
+            if (*cursor_x > line_length)
+            {
+                *cursor_x = line_length;
+            }
         }
-
-        handleInput(&buffer, ch, &cursor_x, &cursor_y);
     }
-
-    endwin();
-    free(buffer.content);
-    return 0;
+    else if (ch == KEY_NPAGE)
+    { // Page Down
+        int page_size = LINES - 2;
+        int count_newlines = 0;
+        for (int i = 0; i < buffer->size; i++)
+        {
+            if (buffer->content[i] == '\n')
+            {
+                count_newlines++;
+            }
+        }
+        for (int i = 0; i < page_size && *cursor_y < count_newlines; i++)
+        {
+            (*cursor_y)++;
+            // Adjust cursor_x similar to DOWN key
+            int line_length = 0;
+            int line_start = current_pos;
+            while (line_start < buffer->size && buffer->content[line_start] != '\n')
+            {
+                line_start++;
+            }
+            if (line_start < buffer->size)
+            {
+                line_start++;
+                while (line_start + line_length < buffer->size &&
+                       buffer->content[line_start + line_length] != '\n')
+                {
+                    line_length++;
+                }
+                if (*cursor_x > line_length)
+                {
+                    *cursor_x = line_length;
+                }
+            }
+        }
+    }
 }

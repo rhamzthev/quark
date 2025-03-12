@@ -1,14 +1,21 @@
-TARGET = ./dist/quark
-SRC = ./src/quark.c
-LIBS = -lncurses -lm
+CC = gcc
+CFLAGS = -Wall -Wextra -I./src
+LDFLAGS = -lncurses -lm
 
-$(TARGET): $(SRC)
-	gcc $(SRC) $(LIBS) -o $(TARGET)
+SRCS = ./src/main.c ./src/explorer/explorer.c ./src/editor/editor.c
+OBJS = $(SRCS:.c=.o)
+TARGET = ./dist/quark
+
+$(TARGET): $(OBJS)
+	$(CC) $(OBJS) -o $(TARGET) $(LDFLAGS)
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
 .PHONY: clean run
 
 run: $(TARGET)
-	./$(TARGET) ./src/quark.c
+	./$(TARGET)
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(OBJS) $(TARGET)

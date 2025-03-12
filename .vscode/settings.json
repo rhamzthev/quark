@@ -1,5 +1,13 @@
 {
     "files.associations": {
-        "ncurses.h": "c"
+        "ncurses.h": "c",
+        "limits": "c",
+        "*.tcc": "c",
+        "buffer.h": "c",
+        "editor.h": "c",
+        "playground.h": "c",
+        "stdlib.h": "c",
+        "limits.h": "c",
+        "stat.h": "c"
     }
 }
